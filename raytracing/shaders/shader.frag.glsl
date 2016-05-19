@@ -61,9 +61,6 @@ uniform vec3 backColor;
 uniform Sphere spheres[numSpheres];
 uniform Plane planes[numPlanes];
 
-StackEntry stack[TRACE_DEPTH];
-StackEntry stack2[TRACE_DEPTH];
-
 Ray GetCameraRay()
 {
 	vec2 imageWH = vec2(float(ImageWidth), float(ImageHeight));
@@ -193,132 +190,105 @@ vec3 BlinnPhong(Object obj, vec3 lightDir, vec3 viewDir)
 	return diffuse + vec3(1.0) * specCoeff;
 }
 
-vec3 Trace(Ray ray, Object obj, int hitObject)
+vec3 CastRay2(int object, Ray ray)
 {
-	vec3 color = vec3(0);
 	float t;
+	int hitObject;
+	TestObjects(ray, object, hitObject, t);
+	
+	if (hitObject != -1) {
+		vec3 hitPoint = ray.origin + t * ray.dir;
+		vec3 lightDir = normalize(lightSource - hitPoint);
+		Object obj = GetObject(hitPoint, hitObject);
 
-	int hitObject2;
+		Ray shadowRay = Ray(hitPoint, lightDir);
+		if (TestShadow(shadowRay, hitObject)) {
+			return vec3(0.2) * obj.color;
+		}
+		else {
+			return BlinnPhong(obj, lightDir, -ray.dir);
+		}
+	}
+	else return backColor;
+}
 
-	vec3 hitPoint;
-	vec3 lightDir;
-	float k = 1;
+vec3 CastRay(int object, Ray ray)
+{
+	float t;
+	int hitObject;
+	TestObjects(ray, object, hitObject, t);
 
-	bool stop = false;
-	int i;
-	for (i = 0; i < TRACE_DEPTH; i++)
-	{
-		TestObjects(ray, hitObject, hitObject2, t);
+	if (hitObject != -1) {
+		vec3 hitPoint = ray.origin + t * ray.dir;
+		vec3 lightDir = normalize(lightSource - hitPoint);
+		Object obj = GetObject(hitPoint, hitObject);
 
-		if (hitObject2 != -1)
-		{
-			hitPoint = ray.origin + t * ray.dir;
-			lightDir = normalize(lightSource - hitPoint);
-			obj = GetObject(hitPoint, hitObject2);
-
-			Ray shadowRay = Ray(hitPoint, lightDir);
-			if (TestShadow(shadowRay, hitObject2)) {
-				obj.color = vec3(0.1) * obj.color;
-				stop = true;
+		Ray shadowRay = Ray(hitPoint, lightDir);
+		if (TestShadow(shadowRay, hitObject)) {
+			return vec3(0.1) * obj.color;
+		}
+		else {
+			vec3 reflectColor;
+			if (obj.material >= 2) {
+				Ray reflectionRay = Ray(hitPoint, normalize(reflect(ray.dir, obj.normal)));
+				reflectColor = CastRay2(hitObject, reflectionRay);
 			}
-			hitObject = hitObject2;
-		}
-		else {
-			stop = true;
-			obj.color = backColor;
-		}
+			else reflectColor = obj.color;
 
-		if (stop) break;
+			vec3 refractColor;
+			if (obj.material == 4) {
+				Ray refractionRay = Ray(hitPoint, normalize(refract(ray.dir, obj.normal, obj.refractIndex)));
+				refractColor = CastRay2(hitObject, refractionRay);
+			}
+			else refractColor = obj.color;
 
-		float ktmp = k;
-		k = Fresnel(obj.normal, -ray.dir, obj.refractIndex);
-		vec3 clr = obj.color * (1-k);
-		stack2[i] = StackEntry(obj, ktmp, clr, lightDir, -ray.dir);
-
-		if (obj.material >= 2)
-			ray = Ray(hitPoint, normalize(reflect(ray.dir, obj.normal)));
-		else {
-			i++;
-			break;
+			float k = Fresnel(obj.normal, -ray.dir, obj.refractIndex);
+			obj.color = mix(refractColor, reflectColor, k);
+			return BlinnPhong(obj, lightDir, -ray.dir);
 		}
 	}
-
-	color = obj.color * k;
-
-	for (int j = i - 1; j >= 0; j--)
-	{
-		stack2[j].obj.color = stack2[j].color + color;
-		color = stack2[j].fresnel * BlinnPhong(stack2[j].obj, stack2[j].lightDir, stack2[j].viewDir);
-	}
-
-	return color;
+	else return backColor;
 }
 
 void main()
 {
-	vec3 color = vec3(0);
-	float t;
+	float t = 0;
+	int hitObject;
+	Ray cameraRay = GetCameraRay();
 
-	int hitObject = -1, hitObject2;
-	Ray ray = GetCameraRay();
+	TestObjects(cameraRay, -1, hitObject, t);
 
-	Object obj;
-	vec3 hitPoint;
-	vec3 lightDir;
-	float k = 1;
-
-	bool stop = false;
-	int i;
-	for (i = 0; i < TRACE_DEPTH; i++)
+	if (hitObject != -1)
 	{
-		TestObjects(ray, hitObject, hitObject2, t);
+		gl_FragColor.xyz = vec3(0);
+		vec3 hitPoint = cameraRay.origin + t * cameraRay.dir;
+		vec3 lightDir = normalize(lightSource - hitPoint);
+		Object obj = GetObject(hitPoint, hitObject);
 
-		if (hitObject2 != -1)
-		{
-			hitPoint = ray.origin + t * ray.dir;
-			lightDir = normalize(lightSource - hitPoint);
-			obj = GetObject(hitPoint, hitObject2);
-
-			Ray shadowRay = Ray(hitPoint, lightDir);
-			if (TestShadow(shadowRay, hitObject2)) {
-				obj.color = vec3(0.1) * obj.color;
-				stop = true;
+		Ray shadowRay = Ray(hitPoint, lightDir);
+		if (TestShadow(shadowRay, hitObject)) {
+			gl_FragColor.xyz = vec3(0.1) * obj.color;
+		}
+		else {
+			vec3 reflectColor;
+			if (obj.material >= 2) {
+				Ray reflectionRay = Ray(hitPoint, normalize(reflect(cameraRay.dir, obj.normal)));
+				reflectColor = CastRay(hitObject, reflectionRay);
 			}
-			hitObject = hitObject2;
-		}
-		else {
-			stop = true;
-			obj.color = backColor;
-		}
+			else reflectColor = obj.color;
 
-		if (stop) break;
+			vec3 refractColor;
+			if (obj.material == 4) {
+				Ray refractionRay = Ray(hitPoint, normalize(refract(cameraRay.dir, obj.normal, obj.refractIndex)));
+				refractColor = CastRay(hitObject, refractionRay);
+			}
+			else refractColor = obj.color;
 
-		if (obj.material == 4)
-		{
-			Ray refractionRay = Ray(hitPoint, normalize(refract(ray.dir, obj.normal, obj.refractIndex)));
-			obj.color = Trace(refractionRay, obj, hitObject);
-		}
+			float k = Fresnel(obj.normal, -cameraRay.dir, obj.refractIndex);
+			obj.color = mix(refractColor, reflectColor, k);
 
-		float ktmp = k;
-		k = Fresnel(obj.normal, -ray.dir, obj.refractIndex);
-		vec3 clr = obj.color * (1-k);
-		stack[i] = StackEntry(obj, ktmp, clr, lightDir, -ray.dir);
-
-		if (obj.material >= 2)
-			ray = Ray(hitPoint, normalize(reflect(ray.dir, obj.normal)));
-		else {
-			i++;
-			break;
+			gl_FragColor.xyz = BlinnPhong(obj, lightDir, -cameraRay.dir);
 		}
 	}
-
-	color = obj.color * k;
-
-	for (int j = i - 1; j >= 0; j--)
-	{
-		stack[j].obj.color = stack[j].color + color;
-		color = stack[j].fresnel * BlinnPhong(stack[j].obj, stack[j].lightDir, stack[j].viewDir);
-	}
-
-	gl_FragColor.xyz = color;
+	else gl_FragColor = vec4(backColor, 1);
 }
